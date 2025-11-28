@@ -1,18 +1,18 @@
 import torch
 import torch.nn as nn
-from lorentz import Lorentz
+from .lorentz import Lorentz
 
 class Lorentz_fully_connected(nn.Module):
-    def __init__(self, in_features, out_features, manifold: Lorentz = Lorentz(0.1), reset_params="eye", activation=nn.functional.relu):
+    def __init__(self, in_features, out_features, manifold: Lorentz = Lorentz(0.1), reset_params="eye", a_default=0.0, activation=nn.functional.relu):
         super().__init__()
         self.manifold = manifold
         self.U = nn.Parameter(torch.randn(in_features, out_features))
         self.a = nn.Parameter(torch.zeros(1, out_features)) # -b
         self.V_auxiliary = nn.Parameter(torch.randn(in_features+1, out_features))
-        self.reset_parameters()
+        self.reset_parameters(reset_params=reset_params, a_default=a_default)
         self.activation = activation
     
-    def reset_parameters(self, reset_params="eye"):
+    def reset_parameters(self, reset_params, a_default):
         in_features, out_features = self.U.shape
         if reset_params == "eye":
             if in_features <= out_features:
@@ -22,11 +22,11 @@ class Lorentz_fully_connected(nn.Module):
                 print("not possible 'eye' initialization, defaulting to kaiming")
                 with torch.no_grad():
                     self.U.data.copy_(torch.randn(in_features, out_features) * (2 * in_features * out_features) ** -0.5)
-            self.a.data.fill_(0.0)
+            self.a.data.fill_(a_default)
         elif reset_params == "kaiming":
             with torch.no_grad():
                 self.U.data.copy_(torch.randn(in_features, out_features) * (2 * in_features * out_features) ** -0.5)
-            self.a.data.fill_(0.0)
+            self.a.data.fill_(a_default)
         else:
             raise KeyError(f"Unknown reset_params value: {reset_params}")
 

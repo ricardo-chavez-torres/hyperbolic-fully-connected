@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from lorentz import Lorentz
+from .lorentz import Lorentz
 
 class ChenLinear(nn.Module):
     """ Linear layer in the Lorentz model, as described in Chen et al. (2020).
