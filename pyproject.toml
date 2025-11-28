@@ -33,3 +33,6 @@ dev = [
 extra-index-url = [
     "https://download.pytorch.org/whl/cu126"
 ]
+
+[tool.setuptools]
+packages = ["layers"]
