@@ -232,7 +232,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Create a wrapper for the objective function to pass static arguments
-    objective_wrapper = lambda trial: objective(trial, args)
+    def objective_wrapper(trial):
+        return objective(trial, args)
 
     # Create an Optuna study
     # The pruner stops unpromising trials early

@@ -489,7 +489,7 @@ class ChenLinear(nn.Module):
             x_time = torch.sqrt(scale**2 + 1 / self.manifold.k() + 1e-5)
             x_time = x_time.masked_fill(mask, 1 / self.manifold.k().sqrt())
 
-            mask = mask == False
+            mask = torch.logical_not(mask)
             x_space = x_space * mask
 
             x = torch.cat([x_time, x_space], dim=-1)
@@ -864,7 +864,7 @@ def main():
         torch.cuda.empty_cache()
         torch._dynamo.reset()
 
-    print(f"\n\n--- Benchmark Finished ---")
+    print("\n\n--- Benchmark Finished ---")
     print(f"Results have been saved to {output_filename}")
 
 
