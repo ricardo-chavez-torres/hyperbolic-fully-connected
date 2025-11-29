@@ -155,7 +155,7 @@ def save_results_to_txt(results: Dict[int, List[int]], filename: str):
     header2 = f"{'':-<12} | {'':-<20} | {'':-<25} | {'':-<15}"
     separator = "-" * len(header1)
 
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("=" * len(header1) + "\n")
         f.write("📊 Hyperplane Distance Convergence Results (WITHOUT ReLU)\n")
         f.write("=" * len(header1) + "\n")

@@ -186,7 +186,7 @@ def save_results_to_txt(results: Dict[int, List[int]], filename: str):
     # Compute Euclidean norm for each distance (with c=0.1)
     sqrt_c = np.sqrt(0.1)
 
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("=" * len(header1) + "\n")
         f.write("📊 Poincaré Hyperplane Distance Convergence Results\n")
         f.write("=" * len(header1) + "\n")
