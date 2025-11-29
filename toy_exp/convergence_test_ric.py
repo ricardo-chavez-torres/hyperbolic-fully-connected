@@ -240,7 +240,7 @@ def main():
             convergence_failed = True
             first_failure_distance = dist
             print(f"   ❌ FAILED to converge (mean iterations: {mean_iters:.1f})")
-            print(f"   📊 Will skip remaining distances")
+            print("   📊 Will skip remaining distances")
         elif mean_iters > MAX_ITERATIONS * 0.8:
             print(f"   ⚠️  STRUGGLING (mean iterations: {mean_iters:.1f})")
         else:
