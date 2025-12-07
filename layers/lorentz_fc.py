@@ -53,7 +53,7 @@ class Lorentz_fully_connected(nn.Module):
         U_norm_sqrt_k_b = self.manifold.k().sqrt() * U_norm * self.a
         time = -U_norm * torch.sinh(U_norm_sqrt_k_b)
         space = torch.cosh(U_norm_sqrt_k_b) * self.U
-        return torch.cat([space, time], dim=0)
+        return torch.cat([time, space], dim=0)
 
     def signed_dist2hyperplanes_scaled_angle(self, x):
         """Scale the distances by scaling the angle (implicitly)"""
