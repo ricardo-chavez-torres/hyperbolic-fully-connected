@@ -70,10 +70,10 @@ class StanfordDogsCustom(Dataset):
         test_list_mat = loadmat(os.path.join(self.base_folder, "test_list.mat"))
 
         full_train_paths = [f[0][0] for f in train_list_mat["file_list"]]
-        full_train_labels = [l[0] - 1 for l in train_list_mat["labels"]]  # 0-indexed
+        full_train_labels = [l[0] - 1 for l in train_list_mat["labels"]]  # 0-indexed  # noqa: E741
 
         self.test_paths = [f[0][0] for f in test_list_mat["file_list"]]
-        self.test_labels = [l[0] - 1 for l in test_list_mat["labels"]]
+        self.test_labels = [l[0] - 1 for l in test_list_mat["labels"]]  # noqa: E741
 
         # Create a stratified val split from the full training data
         train_indices, val_indices = train_test_split(
