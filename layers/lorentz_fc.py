@@ -73,6 +73,7 @@ class Lorentz_fully_connected(nn.Module):
         return self.activation(x @ V)
 
     def forward(self, x):
+        print("avg val", (self.a.data ** 2).mean().sqrt().item())
         if self.do_mlr:
             return self.mlr(x)
         output_space = self.compute_output_space(x)

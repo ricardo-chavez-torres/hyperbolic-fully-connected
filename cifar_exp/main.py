@@ -10,9 +10,11 @@ sys.path.insert(0, str(parent_dir))
 
 from layers import Lorentz, Lorentz_Conv2d, Lorentz_fully_connected
 
+# TODO: check effect of initialising bias to 0 vs. e.g. 0.01
+
 dataset = CIFAR100(root='./data', train=True, download=True, transform=torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
                                                                                                       torchvision.transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))]))
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=True)
+dataloader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True)
 
 manifold = Lorentz(k=1.0)
 a = Lorentz_Conv2d(in_channels=3, out_channels=16, kernel_size=3, stride=1, padding="same", bias=True, manifold=manifold)
@@ -59,5 +61,4 @@ for epoch in range(50):
             avg_loss = running_loss / 10
             print(f'Batch {idx}, Average Loss: {avg_loss:.3f}, Accuracy: {(output.argmax(dim=1) == labels).float().mean().item() * 100:.2f}%')
             running_loss = 0.0
-
     print(f'Epoch {epoch+1} completed.')
