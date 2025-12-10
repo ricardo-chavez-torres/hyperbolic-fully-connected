@@ -115,7 +115,7 @@ class Poincare_distance2hyperplanes(nn.Module):
 
     def forward(self, x):
         sqrt_c = self.manifold.c().sqrt()
-        lambda_x_c = 2 / (1 - self.manifold.c() * x.norm(dim=-1, keepdim=True) ** 2)
+        lambda_x_c = 2 / (1 - self.manifold.c() * x.pow(2).sum(dim=-1, keepdim=True))
         Z_norm = self.Z.norm(dim=0, keepdim=True)
         scores = (
             2
@@ -123,7 +123,7 @@ class Poincare_distance2hyperplanes(nn.Module):
             * Z_norm
             * torch.asinh(
                 lambda_x_c
-                * torch.inner(sqrt_c * x, (self.Z / Z_norm).T)
+                * torch.matmul(sqrt_c * x, self.Z / Z_norm)
                 * torch.cosh(2 * self.a * sqrt_c)
                 - (lambda_x_c - 1) * torch.sinh(2 * sqrt_c * self.a)
             )
