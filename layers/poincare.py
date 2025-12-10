@@ -20,7 +20,8 @@ def project(x: torch.Tensor, c: torch.Tensor, dim: int = -1, eps: float = -1.0):
 class Poincare(nn.Module):
     def __init__(self, c: float = 0.1, requires_grad=False):
         super().__init__()
-        k_value = torch.log(torch.exp(torch.tensor(c)) - 1)
+        # Use expm1 for stability with small curvature
+        k_value = torch.log(torch.expm1(torch.tensor(c))) # Inverse of softplus
         self.c_softplus_inv = nn.Parameter(k_value, requires_grad=requires_grad)
 
     def c(self):
@@ -32,11 +33,11 @@ class Poincare(nn.Module):
     def expmap0(self, x):
         sqrt_c = self.c() ** 0.5
         norm_x_c_sqrt = x.norm(dim=-1, keepdim=True).clamp(min=1e-15) * sqrt_c
-        return project(torch.tanh(norm_x_c_sqrt) * x / norm_x_c_sqrt, self.c(), dim=-1)
+        return project(torch.tanh(norm_x_c_sqrt / 2) * x / norm_x_c_sqrt, self.c(), dim=-1)
 
     def logmap0(self, y):
         y_norm_c_sqrt = y.norm(dim=-1, keepdim=True).clamp_min(1e-15) * self.c().sqrt()
-        return torch.atanh(y_norm_c_sqrt) * y / y_norm_c_sqrt
+        return 2 * torch.atanh(y_norm_c_sqrt) * y / y_norm_c_sqrt
 
     def radius(self):
         """
@@ -114,7 +115,7 @@ class Poincare_distance2hyperplanes(nn.Module):
 
     def forward(self, x):
         sqrt_c = self.manifold.c().sqrt()
-        lambda_x_c = 2 / (1 - self.manifold.c() * x.norm(dim=-1, keepdim=True) ** 2)
+        lambda_x_c = 2 / (1 - self.manifold.c() * x.pow(2).sum(dim=-1, keepdim=True))
         Z_norm = self.Z.norm(dim=0, keepdim=True)
         scores = (
             2
@@ -122,7 +123,7 @@ class Poincare_distance2hyperplanes(nn.Module):
             * Z_norm
             * torch.asinh(
                 lambda_x_c
-                * torch.inner(sqrt_c * x, (self.Z / Z_norm).T)
+                * torch.matmul(sqrt_c * x, self.Z / Z_norm)
                 * torch.cosh(2 * self.a * sqrt_c)
                 - (lambda_x_c - 1) * torch.sinh(2 * sqrt_c * self.a)
             )
