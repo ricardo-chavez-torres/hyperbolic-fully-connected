@@ -8,22 +8,22 @@ import torch.optim as optim
 import numpy as np
 import random
 from typing import List, Dict
-# from pathlib import Path
-# import sys
+from pathlib import Path
+import sys
 
 # # Add layers directory to path
-# parent_dir = Path(__file__).parent.parent
-# sys.path.insert(0, str(parent_dir))
+parent_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(parent_dir))
 
 from layers.poincare import Poincare, Poincare_linear, project
 
 
 # --- Constants for the Experiment ---
 SEEDS = range(3)
-HYPERBOLIC_DISTANCES = range(1, 45, 3)  # Start from 1, Poincaré may be more sensitive
+HYPERBOLIC_DISTANCES = range(1, 80, 3)  # Start from 1, Poincaré may be more sensitive
 LEARNING_RATE = 0.001
 MAX_ITERATIONS = 10000
-LOSS_THRESHOLD = 0.01
+LOSS_THRESHOLD = 0.0001
 BATCH_SIZE = 64
 DIM = 4
 OUTPUT_FILENAME = "./poincare_hyperplane_distance_results.txt"

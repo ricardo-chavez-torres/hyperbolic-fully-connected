@@ -8,12 +8,12 @@ import torch.optim as optim
 import numpy as np
 import random
 from typing import List, Dict
-# from pathlib import Path
-# import sys
+from pathlib import Path
+import sys
 
 # Add layers directory to path
-# parent_dir = Path(__file__).parent.parent
-# sys.path.insert(0, str(parent_dir))
+parent_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(parent_dir))
 
 from layers import ChenLinear, Lorentz  # noqa: E402
 

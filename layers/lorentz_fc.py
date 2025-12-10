@@ -116,13 +116,14 @@ class Lorentz_Conv2d(nn.Module):
             in_features=in_channels * kernel_size * kernel_size,
             out_features=out_channels,
             manifold=manifold,
+            activation=nn.Identity(),
         )
 
     def forward(self, x: torch.Tensor):
         if self.padding == "same":
             pad = self.kernel_size // 2
             x = nn.functional.pad(x, (pad, pad, pad, pad), mode='constant', value=0)  # Pad height and width
-            time_comp = torch.sqrt(1.0 + (x[:, 1:, :, :] ** 2).sum(dim=1, keepdim=True))
+            time_comp = torch.sqrt(1/self.manifold.k() + (x[:, 1:, :, :] ** 2).sum(dim=1, keepdim=True))
             x = torch.cat([time_comp, x[:, 1:, :, :]], dim=1)
         batch_size, in_channels, height, width = x.shape
         x_unfolded = x.unfold(dimension=2, size=self.kernel_size, step=self.stride).unfold(dimension=3, size=self.kernel_size, step=self.stride)  # (B, (C+1), H_out, W_out, k, k)
