@@ -16,7 +16,7 @@ sys.path.insert(0, str(parent_dir))
 
 # Attempt imports, assuming the directory structure is correct
 try:
-    from layers import Lorentz, LorentzFullyConnected, ChenLinear, Poincare, Poincare_linear, project
+    from layers import Lorentz, LorentzFullyConnected, ChenLinear, ILNNLinear, Poincare, Poincare_linear, project
 except ImportError:
     print("⚠️  Could not import 'layers'. Ensure you are running this from the correct directory.")
     sys.exit(1)
@@ -156,6 +156,13 @@ def run_experiment(
             manifold=manifold,
         ).double()
         optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE * 100)
+    elif model_type == "ilnn":
+        model = ILNNLinear(
+            in_features=dim + 1,
+            out_features=dim + 1,
+            manifold=manifold,
+        ).double()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE * 100)
     else: # Poincare
         model = Poincare_linear(
             in_features=dim,
@@ -245,8 +252,8 @@ def plot_results(results: Dict[str, Dict[int, Dict]], filename: str):
     """Plots the convergence results."""
     plt.figure(figsize=(10, 6))
     
-    colors = {'ours': 'green', 'chen': 'blue', 'poincare': 'red'}
-    markers = {'ours': 'o', 'chen': 's', 'poincare': '^'}
+    colors = {'ours': 'green', 'chen': 'blue', 'poincare': 'red', 'ilnn': 'purple'}
+    markers = {'ours': 'o', 'chen': 's', 'poincare': '^', 'ilnn': 'D'}
 
     for model_name, data in results.items():
         if not data: continue
@@ -273,8 +280,8 @@ def plot_results(results: Dict[str, Dict[int, Dict]], filename: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Hyperbolic Hyperplane Convergence Test")
-    parser.add_argument("--models", nargs="+", choices=["ours", "chen", "poincare"], 
-                        default=["ours", "chen", "poincare"], help="Models to run")
+    parser.add_argument("--models", nargs="+", choices=["ours", "chen", "ilnn", "poincare"],
+                        default=["ours", "chen", "ilnn", "poincare"], help="Models to run")
     args = parser.parse_args()
 
     print("🚀 Starting Hyperplane Distance Test")
@@ -305,7 +312,7 @@ def main():
                 continue
 
             # Select Manifold
-            if model_name in ["ours", "chen"]:
+            if model_name in ["ours", "chen", "ilnn"]:
                 manifold = lorentz_manifold
             else:
                 manifold = poincare_manifold

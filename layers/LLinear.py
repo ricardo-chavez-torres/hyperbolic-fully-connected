@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .lorentz import Lorentz
+from .ilnn import ILNNLinear
 from einops import rearrange
 import math
 
@@ -276,12 +277,15 @@ def resolve_lorentz_fc_class(variant: str):
     Supported values:
         - "ours": LorentzFullyConnectedOurs
         - "theirs": LorentzFullyConnectedTheirs
+        - "ilnn": ILNNLinear (Point-to-Hyperplane Lorentz FC, ICLR 2026)
     """
     key = (variant or "ours").lower()
     if key in {"ours", "new", "default"}:
         return LorentzFullyConnectedOurs
     if key in {"theirs", "old", "legacy"}:
         return LorentzFullyConnectedTheirs
+    if key in {"ilnn", "plfc"}:
+        return ILNNLinear
     raise ValueError(f"Unknown Lorentz FC variant: {variant}")
 
 

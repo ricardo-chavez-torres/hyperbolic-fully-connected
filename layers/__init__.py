@@ -9,6 +9,7 @@ from .LLinear import (
     resolve_lorentz_fc_class,
 )
 from .chen import ChenLinear
+from .ilnn import ILNNLinear
 from .poincare import Poincare, Poincare_linear, project, PoincareActivation
 from .LResNet import lorentz_resnet18
 from .LConv import LorentzConv2d
@@ -22,6 +23,7 @@ __all__ = [
     "LorentzMLR",
     "resolve_lorentz_fc_class",
     "ChenLinear",
+    "ILNNLinear",
     "Poincare",
     "Poincare_linear",
     "project",

@@ -67,6 +67,8 @@ class HyperbolicGraphConvolution(nn.Module):
             self.linear = HypLinearOurs(manifold=manifold, in_features=in_features, out_features=out_features)
         elif linear_variant == 'chen':
             self.linear = HypLinearChen(manifold=manifold, in_features=in_features, out_features=out_features)
+        elif linear_variant == 'ilnn':
+            self.linear = HypLinearILNN(manifold=manifold, in_features=in_features, out_features=out_features)
         else:
             self.linear = HypLinear(manifold, in_features, out_features, c_in, dropout, use_bias)
         self.agg = HypAgg(manifold, c_in, out_features, dropout, use_att, local_agg)
@@ -290,6 +292,58 @@ class HypLinearChen(nn.Module):
         nn.init.uniform_(self.weight.weight, -self.init_std, self.init_std)
         if self.weight.bias is not None:
             nn.init.constant_(self.weight.bias, 0)
+
+
+class HypLinearILNN(nn.Module):
+    """Point-to-Hyperplane Lorentz linear layer (ILNN, ICLR 2026), adapted for HGCN.
+
+    Baseline re-implementation of ``PointToHyperplaneLorentzFC`` from
+    Long et al., "ILNN" (https://github.com/Longchentong/ILNN). Computes the
+    signed geodesic distance to learned hyperplanes (the ``asinh`` formula) and
+    maps it back onto the hyperboloid via ``sinh`` + orthogonal projection.
+
+    Uses the same manifold API (``k()``, ``projection_space_orthogonal``) as
+    ``HypLinearOurs``, so the curvature convention is shared with the rest of the
+    pipeline. The optional gyro-bias from the reference implementation is omitted
+    (off by default there) to keep this self-contained.
+    """
+
+    def __init__(self, manifold, in_features, out_features, eps=1e-9):
+        super().__init__()
+        self.manifold = manifold
+        self.in_features = in_features
+        self.out_features = out_features
+        self.eps = eps
+
+        self.z = nn.Parameter(torch.empty(out_features - 1, in_features - 1))  # (m, n)
+        self.a = nn.Parameter(torch.zeros(out_features - 1))  # (m,)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.z, mean=0.0, std=0.02)
+        nn.init.zeros_(self.a)
+
+    def forward(self, x):
+        sqrt_k = self.manifold.k().sqrt()  # sqrt(-K)
+        inv_sqrt_k = 1.0 / sqrt_k
+
+        x_t = x[..., 0]
+        x_s = x[..., 1:]
+
+        norm_z = torch.linalg.norm(self.z, dim=-1)
+        cosh_term = torch.cosh(sqrt_k * self.a)
+        sinh_term = torch.sinh(sqrt_k * self.a)
+
+        z_dot_xs = torch.einsum('mk,...k->...m', self.z, x_s)
+        alpha = cosh_term * z_dot_xs - sinh_term * norm_z * x_t.unsqueeze(-1)
+        beta = torch.sqrt((cosh_term * norm_z) ** 2 - (sinh_term * norm_z) ** 2 + self.eps)
+
+        ratio = sqrt_k * alpha / beta
+        v = inv_sqrt_k * torch.sign(alpha) * beta * torch.abs(torch.asinh(ratio))
+        v = v.clamp(min=-10.0, max=10.0)
+
+        w = inv_sqrt_k * torch.sinh((sqrt_k * v).clamp(-100, 100))
+        return self.manifold.projection_space_orthogonal(w)
 
 
 class HypAgg(Module):

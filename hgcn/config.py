@@ -42,7 +42,7 @@ config_args = {
         'double-precision': ('0', 'whether to use double precision'),
         'use-att': (0, 'whether to use hyperbolic attention or not'),
         'local-agg': (0, 'whether to local tangent space aggregation or not'),
-        'linear-variant': ('standard', 'hyperbolic linear layer variant: standard (logmap-linear-expmap) or ours (hyperplane distance)'),
+        'linear-variant': ('standard', 'hyperbolic linear layer variant: standard (logmap-linear-expmap), ours (hyperplane distance), chen, or ilnn (point-to-hyperplane, ICLR 2026)'),
         'decoder-variant': ('standard', 'decoder variant: standard (logmap-linear) or mlr (signed distance to class hyperplanes)')
     },
     'data_config': {

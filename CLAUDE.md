@@ -68,3 +68,4 @@ CIFAR training uses Riemannian SGD (`geoopt.optim.RiemannianSGD`) with 3 paramet
 - `poincare.py`: Poincare ball model — linear layer computes distance-to-hyperplanes in the ball, maps back via inverse operations
 - `chen.py`: `ChenLinear` — standalone Chen et al. layer (similar to "theirs" but used directly in toy/runtime experiments)
 - `bdeir.py`: `BdeirLorentzMLR` — Bdeir et al. classification head
+- `ilnn.py`: `ILNNLinear` — Point-to-Hyperplane Lorentz FC layer (Long et al., ILNN, ICLR 2026; ported from https://github.com/Longchentong/ILNN). Computes signed geodesic distance to learned hyperplanes (`asinh`), then maps back to the hyperboloid via `sinh` + orthogonal projection; returns signed distances directly when `do_mlr=True`. Optional gyro-bias from the reference impl is omitted. Selectable as `fc_variant="ilnn"` (via `resolve_lorentz_fc_class`), as model `"ilnn"` in the toy/runtime experiments, and as `linear_variant="ilnn"` (`HypLinearILNN`) in `hgcn/`

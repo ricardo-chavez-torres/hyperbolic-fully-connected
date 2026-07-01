@@ -310,6 +310,9 @@ def train(config=None):
     elif lorentz_method == "theirs":
         fc_variant = "theirs"
         mlr_type = "lorentz_mlr"
+    elif lorentz_method == "ilnn":
+        fc_variant = "ilnn"
+        mlr_type = "fc_mlr"
     else:
         fc_variant = get_config('fc_variant', 'ours')
         mlr_type = get_config('mlr_type', get_config('classifier_type', 'lorentz_mlr'))
@@ -589,7 +592,7 @@ def main():
         "normalisation_mode": "centering_only",  # "normal", "fix_gamma", "skip_final_bn2", "clamp_scale", "mean_only", or "centering_only"
         "mlr_type": "fc_mlr",  # "lorentz_mlr" or "fc_mlr"
         "manifold": "lorentz",
-        "fc_variant": "ours",  # "ours" or "theirs"
+        "fc_variant": "ours",  # "ours", "theirs", or "ilnn"
         "lorentz_method": "theirs",  # None, "ours", or "theirs"
         "norm_config": "normal_noweightnorm",
 

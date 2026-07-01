@@ -10,7 +10,7 @@ import csv
 
 parent_dir = Path(__file__).parent
 sys.path.insert(0, str(parent_dir.parent))
-from layers import Lorentz, LorentzFullyConnected, Poincare, project, Poincare_linear, ChenLinear, PoincareActivation
+from layers import Lorentz, LorentzFullyConnected, Poincare, project, Poincare_linear, ChenLinear, ILNNLinear, PoincareActivation
 
 # # Examples of input shapes and outputs shapes:
 # Lorentz_fully_connected(10, 5, manifold=Lorentz(0.1)) # accepts input of shape [batch_size, 10+1] and outputs [batch_size, 5+1]
@@ -206,6 +206,15 @@ def main():
                     bias=True,
                     normalize=True,
                     learn_scale=True,
+                ),
+                lorentz_input,
+                "forward",
+            ),
+            "ILNN": (
+                ILNNLinear(
+                    manifold=lorentz_manifold,
+                    in_features=in_dim + 1,
+                    out_features=out_dim + 1,
                 ),
                 lorentz_input,
                 "forward",
