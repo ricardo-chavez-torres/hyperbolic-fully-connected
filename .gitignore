@@ -18,5 +18,11 @@ cifar_exp/checkpoints/
 slurm/logs/
 runtime_exp/results/
 outputs/
+
+# Experiment outputs and local notes: hgcn/train.py appends every run to hgcn/results.txt,
+# summarised with `python hgcn/parse_results.py [file]`.
+hgcn/results*.txt
+hgcn/*.ipynb
+issues.md
 *.egg-info/
 __pycache__/

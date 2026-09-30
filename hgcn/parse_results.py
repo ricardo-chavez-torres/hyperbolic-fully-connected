@@ -1,4 +1,6 @@
 import re
+import sys
+
 import pandas as pd
 
 def parse_results(path="results.txt"):
@@ -58,10 +60,39 @@ def parse_results(path="results.txt"):
     return pd.DataFrame(rows)
 
 
+def summarize(df):
+    """Mean and std over seeds per dataset, task, encoder, learning rate and curvature.
+
+    Returns (node classification, link prediction) tables: accuracy/F1 for NC,
+    ROC-AUC/AP for LP.
+    """
+    metrics = [m for m in ("test_acc", "test_f1", "test_roc", "test_ap") if m in df.columns]
+    aggregations = {"n": ("seed", "count")}
+    for m in metrics:
+        aggregations[f"{m}_mean"] = (m, "mean")
+        aggregations[f"{m}_std"] = (m, "std")
+    summary = (
+        df.groupby(["dataset", "task", "encoder", "lr", "curvature"])
+        .agg(**aggregations)
+        .reset_index()
+    )
+
+    def keep(task, task_metrics):
+        drop = [c for c in summary.columns
+                if c.startswith("test_") and not c.rsplit("_", 1)[0] in task_metrics]
+        return summary[summary["task"] == task].drop(columns=drop)
+
+    return keep("NC", ("test_acc", "test_f1")), keep("LP", ("test_roc", "test_ap"))
+
+
 if __name__ == "__main__":
-    df = parse_results()
+    # Usage: python parse_results.py [RESULTS_FILE]   (train.py appends to results.txt)
+    df = parse_results(sys.argv[1] if len(sys.argv) > 1 else "results.txt")
     print(f"{len(df)} experiments parsed")
-    print(df.head(10).to_string())
-    print("\nColumns:", list(df.columns))
     print("\nDataset x Task x Encoder counts:")
     print(df.groupby(["dataset", "task", "encoder"]).size().to_string())
+    nc, lp = summarize(df)
+    print("\n=== Node Classification ===")
+    print(nc.to_string(index=False))
+    print("\n=== Link Prediction ===")
+    print(lp.to_string(index=False))
