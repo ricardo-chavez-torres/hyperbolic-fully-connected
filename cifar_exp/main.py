@@ -891,7 +891,7 @@ def main():
     # wandb.init() will use sweep config if run by wandb agent,
     # otherwise uses default_config
     wandb.init(
-        project="FGG-LNN",
+        project="ICML_Hyperbolic",
         config=default_config
     )
 
