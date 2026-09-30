@@ -2,6 +2,9 @@ from pathlib import Path
 import sys
 import time
 import math
+import json
+import os
+import platform
 import random
 
 import numpy as np
@@ -17,6 +20,33 @@ from geoopt.optim import RiemannianSGD
 parent_dir = Path(__file__).parent
 sys.path.insert(0, str(parent_dir.parent))
 from layers import lorentz_resnet18, Lorentz
+
+# Dataset name -> (torchvision class, number of classes).
+DATASETS = {
+    "cifar10": (torchvision.datasets.CIFAR10, 10),
+    "cifar100": (torchvision.datasets.CIFAR100, 100),
+}
+
+
+def synchronize(device):
+    """Waits for queued CUDA work, so that wall-clock timings are accurate."""
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+
+
+def save_runtime(runtime, path):
+    """Writes the runtime record to disk (rewritten after every epoch, so the
+    measurements survive a job that is killed before the last epoch).
+
+    The schema deliberately matches baselines/ilnn/experiments/vision/train.py, so
+    that runtime.json files from both codebases can be compared field by field
+    (see runtime_exp/summarize_training_benchmark.py).
+    """
+    if path is None:
+        return
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(runtime, f, indent=2)
 
 
 def get_param_groups(model, lr_manifold, weight_decay_manifold, verbose=False):
@@ -117,23 +147,37 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, devi
 def get_dataloaders(
     batch_size,
     data_dir,
+    dataset="cifar10",
     val_fraction=0.1,
     train_subset_fraction=1.0,
     seed=42,
+    num_workers=2,
 ):
     """
-    Create CIFAR-10 train/val/test dataloaders.
+    Create CIFAR-10 / CIFAR-100 train/val/test dataloaders.
 
     Args:
         batch_size: Batch size for all loaders
         data_dir: Directory to store/load CIFAR data
-        val_fraction: Fraction of training set to use for validation (default 10%)
+        dataset: "cifar10" or "cifar100"
+        val_fraction: Fraction of training set to use for validation (default 10%).
+            Set to 0 to train on the full training set and use the *test* set for
+            validation — this is the protocol of the ILNN baseline (its
+            select_dataset() returns val_loader = test_loader), and matching it is
+            what makes the two per-epoch training times comparable (same number of
+            iterations per epoch).
         train_subset_fraction: Fraction of training set to use (after val split) for faster sweeps
         seed: Random seed for reproducible splits
+        num_workers: DataLoader worker processes (ILNN uses 8)
 
     Returns:
         train_loader, val_loader, test_loader
     """
+    try:
+        dataset_cls, _ = DATASETS[dataset]
+    except KeyError:
+        raise ValueError(f"Unknown dataset {dataset!r}, expected one of {sorted(DATASETS)}")
+
     mean = (0.5074, 0.4867, 0.4411)
     std = (0.267, 0.256, 0.276)
 
@@ -150,17 +194,17 @@ def get_dataloaders(
     ])
 
     # Load full training set (will be split into train/val)
-    full_trainset = torchvision.datasets.CIFAR10(
+    full_trainset = dataset_cls(
         data_dir, train=True, download=True, transform=train_transform
     )
 
     # For validation, we need the same data but without augmentation
-    full_trainset_val = torchvision.datasets.CIFAR10(
+    full_trainset_val = dataset_cls(
         data_dir, train=True, download=True, transform=val_transform
     )
 
     # Test set is completely separate
-    testset = torchvision.datasets.CIFAR10(
+    testset = dataset_cls(
         data_dir, train=False, download=True, transform=val_transform
     )
 
@@ -185,16 +229,21 @@ def get_dataloaders(
 
     train_loader = DataLoader(
         train_subset, batch_size=batch_size, shuffle=True,
-        num_workers=2, pin_memory=True
-    )
-    val_loader = DataLoader(
-        val_subset, batch_size=batch_size, shuffle=False,
-        num_workers=2, pin_memory=True
+        num_workers=num_workers, pin_memory=True
     )
     test_loader = DataLoader(
         testset, batch_size=batch_size, shuffle=False,
-        num_workers=2, pin_memory=True
+        num_workers=num_workers, pin_memory=True
     )
+
+    if val_size == 0:
+        # ILNN protocol: no held-out split, model selection happens on the test set.
+        val_loader = test_loader
+    else:
+        val_loader = DataLoader(
+            val_subset, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, pin_memory=True
+        )
 
     return train_loader, val_loader, test_loader
 
@@ -221,9 +270,12 @@ def train_epoch(model, train_loader, optimizer, device='cuda'):
 
 
 def evaluate(model, loader, device='cuda'):
-    """Evaluate on a dataset, return avg loss and accuracy."""
+    """Evaluate on a dataset, return avg loss, top-1 accuracy and top-5 accuracy.
+
+    Accuracies are fractions in [0, 1]; ILNN reports them as percentages.
+    """
     model.eval()
-    running_loss, total_correct, total_samples = 0.0, 0, 0
+    running_loss, total_correct, total_correct5, total_samples = 0.0, 0, 0, 0
 
     with torch.no_grad():
         for x, y in loader:
@@ -232,11 +284,18 @@ def evaluate(model, loader, device='cuda'):
             logits = model(x).squeeze()
             loss = F.cross_entropy(logits, y, reduction='sum')
 
+            top5 = logits.topk(min(5, logits.size(1)), dim=1).indices
+
             running_loss += loss.item()
             total_correct += (logits.argmax(dim=1) == y).sum().item()
+            total_correct5 += (top5 == y.unsqueeze(1)).any(dim=1).sum().item()
             total_samples += x.size(0)
 
-    return running_loss / total_samples, total_correct / total_samples
+    return (
+        running_loss / total_samples,
+        total_correct / total_samples,
+        total_correct5 / total_samples,
+    )
 
 
 class EarlyStopping:
@@ -276,17 +335,27 @@ def train(config=None):
     # Reproducibility
     seed_everything(get_config('seed', 0))
     device = 'cuda'
+    script_start = time.perf_counter()
+
+    dataset = get_config('dataset', 'cifar10')
+    num_classes = DATASETS[dataset][1]
+    val_fraction = get_config('val_fraction', 0.1)
 
     # Data
+    t0 = time.perf_counter()
     train_loader, val_loader, test_loader = get_dataloaders(
         batch_size=get_config('batch_size', 128),
         data_dir="./data/cifar",
-        val_fraction=get_config('val_fraction', 0.1),
+        dataset=dataset,
+        val_fraction=val_fraction,
         train_subset_fraction=get_config('train_subset_fraction', 1.0),
         seed=get_config('data_split_seed', 42),
+        num_workers=get_config('num_workers', 2),
     )
+    dataset_setup_time = time.perf_counter() - t0
 
     # Model
+    t0 = time.perf_counter()
     manifold = Lorentz(k_value=get_config('curvature', 1.0))
 
     # Handle coupled norm_config parameter (for sweeps)
@@ -318,7 +387,7 @@ def train(config=None):
         mlr_type = get_config('mlr_type', get_config('classifier_type', 'lorentz_mlr'))
 
     if get_config("manifold", "lorentz") == "euclidean":
-        model = torchvision.models.resnet18(num_classes=10)
+        model = torchvision.models.resnet18(num_classes=num_classes)
         model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         model.maxpool = nn.Identity()
         model = model.to(device)
@@ -326,7 +395,7 @@ def train(config=None):
         base_dim = get_config('hidden_dim', 64)
         embedding_dim = get_config('embedding_dim', None)
         model = lorentz_resnet18(
-            num_classes=10,
+            num_classes=num_classes,
             base_dim=base_dim,
             manifold=manifold,
             init_method=get_config('init_method', 'lorentz_kaiming'),
@@ -338,6 +407,9 @@ def train(config=None):
             fc_variant=fc_variant,
             embedding_dim=embedding_dim,
         ).to(device)
+
+    synchronize(device)
+    model_setup_time = time.perf_counter() - t0
 
     # Log model size
     total_params = sum(p.numel() for p in model.parameters())
@@ -450,17 +522,67 @@ def train(config=None):
     checkpoint_path_acc = checkpoint_dir / f"best_model_acc_{wandb.run.id}.pt"
     checkpoint_path_loss = checkpoint_dir / f"best_model_loss_{wandb.run.id}.pt"
 
+    # Runtime record: cost of training this model. Same schema as
+    # baselines/ilnn/experiments/vision/train.py so the two can be compared directly.
+    runtime_path = get_config('runtime_json', None)
+    runtime = {
+        "exp_name": get_config('exp_name', f"{get_config('manifold', 'lorentz')}-{dataset}"),
+        "dataset": dataset,
+        "seed": get_config('seed', 0),
+        "num_epochs": num_epochs,
+        "batch_size": get_config('batch_size', 128),
+        "encoder_manifold": get_config('manifold', 'lorentz'),
+        "decoder_manifold": get_config('manifold', 'lorentz'),
+        "fc_variant": fc_variant if get_config('manifold', 'lorentz') != 'euclidean' else None,
+        "norm_config": norm_config,
+        "compile": bool(get_config('compile', False)),
+        "device": device,
+        "gpu_name": torch.cuda.get_device_name(device) if torch.cuda.is_available() else None,
+        "hostname": platform.node(),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "wandb_run_id": wandb.run.id,
+        "best_checkpoint": str(checkpoint_path_acc.resolve()),
+        # ILNN has no held-out val split (val_loader = test_loader); val_fraction=0
+        # reproduces that here, anything else means honest model selection.
+        "val_protocol": "test_set_as_val" if val_fraction == 0 else f"heldout_{val_fraction}",
+        "train_set_size": len(train_loader.dataset),
+        "val_set_size": len(val_loader.dataset),
+        "test_set_size": len(test_loader.dataset),
+        "dataset_setup_time_s": dataset_setup_time,
+        "model_setup_time_s": model_setup_time,
+        "num_params": total_params,
+        "num_trainable_params": sum(p.numel() for p in model.parameters() if p.requires_grad),
+        "iterations_per_epoch": len(train_loader),
+        "epochs": [],
+    }
+    save_runtime(runtime, runtime_path)
+
     # Training loop
     best_val_acc = 0.0
     best_val_loss = float('inf')
+    best_epoch = 0
+
+    train_time = 0.0  # pure optimisation time, without validation/checkpointing
+    val_time = 0.0
+    train_time_to_best = 0.0  # training seconds spent to reach the best val epoch
+    loop_start = time.perf_counter()
 
     for epoch in range(start_epoch, num_epochs):
         start = time.time()
+        epoch_start = time.perf_counter()
 
         train_loss, train_acc = train_epoch(
             model, train_loader, optimizer, device,
         )
-        val_loss, val_acc = evaluate(model, val_loader, device)
+
+        synchronize(device)
+        epoch_train_time = time.perf_counter() - epoch_start
+        train_time += epoch_train_time
+        val_start = time.perf_counter()
+
+        val_loss, val_acc, val_acc5 = evaluate(model, val_loader, device)
 
         if not all(map(math.isfinite, [train_loss, train_acc, val_loss, val_acc])):
             msg = (
@@ -493,7 +615,9 @@ def train(config=None):
             "train/acc": train_acc,
             "val/loss": val_loss,
             "val/acc": val_acc,
+            "val/acc5": val_acc5,
             "epoch_time": epoch_time,
+            "train_time": epoch_train_time,
             "learning_rate": optimizer.param_groups[0]['lr']
         }
         wandb.log(metrics)
@@ -501,7 +625,10 @@ def train(config=None):
         # Track best validation metrics
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_epoch = epoch + 1
+            train_time_to_best = train_time
             wandb.run.summary["best_val_acc"] = best_val_acc
+            wandb.run.summary["best_epoch"] = best_epoch
             # Save model checkpoint
             # Convert wandb config to dict safely
             if isinstance(config, dict):
@@ -552,9 +679,31 @@ def train(config=None):
             torch.save(checkpoint, checkpoint_path_loss)
             print(f"  → Saved checkpoint (best val_loss: {val_loss:.4f})")
 
+        synchronize(device)
+        epoch_val_time = time.perf_counter() - val_start
+        val_time += epoch_val_time
+
+        runtime["epochs"].append({
+            "epoch": epoch + 1,
+            "train_time_s": epoch_train_time,
+            "val_time_s": epoch_val_time,
+            "val_acc1": 100.0 * val_acc,
+        })
+        runtime["epochs_completed"] = len(runtime["epochs"])
+        runtime["train_time_s"] = train_time
+        runtime["val_time_s"] = val_time
+        runtime["elapsed_since_loop_start_s"] = time.perf_counter() - loop_start
+        runtime["mean_epoch_train_time_s"] = train_time / len(runtime["epochs"])
+        save_runtime(runtime, runtime_path)
+
         print(f"Epoch {epoch+1}/{num_epochs} ({epoch_time:.1f}s)")
         print(f"  Train: loss={train_loss:.4f}, acc={train_acc:.4f}")
-        print(f"  Val:   loss={val_loss:.4f}, acc={val_acc:.4f}")
+        print(f"  Val:   loss={val_loss:.4f}, acc={val_acc:.4f}, acc5={val_acc5:.4f}")
+        print("[timing] epoch {}/{}: train={:.1f}s, val={:.1f}s, elapsed={:.1f}s, "
+              "projected_total_train={:.1f}s".format(
+                  epoch + 1, num_epochs, epoch_train_time, epoch_val_time,
+                  runtime["elapsed_since_loop_start_s"],
+                  runtime["mean_epoch_train_time_s"] * num_epochs))
 
         # Early stopping check
         if early_stopping is not None:
@@ -563,12 +712,65 @@ def train(config=None):
                 wandb.run.summary["early_stopped_epoch"] = epoch + 1
                 break
 
-    # Final test evaluation (only if not a sweep or if explicitly requested)
+    total_loop_time = time.perf_counter() - loop_start
+    runtime["total_loop_time_s"] = total_loop_time
+    runtime["best_epoch"] = best_epoch
+    runtime["best_val_acc1"] = 100.0 * best_val_acc
+    runtime["train_time_to_best_epoch_s"] = train_time_to_best
+
+    print("-----------------\nTraining finished\n-----------------")
+    print("Best epoch = {}, with val Acc@1={:.4f}".format(best_epoch, best_val_acc))
+
+    epoch_train_times = [e["train_time_s"] for e in runtime["epochs"]]
+    if epoch_train_times:
+        # Steady-state estimate: the first epoch pays for CUDA/cuDNN warm-up.
+        steady = epoch_train_times[1:] if len(epoch_train_times) > 1 else epoch_train_times
+        runtime["median_epoch_train_time_s"] = float(np.median(steady))
+        runtime["first_epoch_train_time_s"] = epoch_train_times[0]
+        runtime["train_time_per_1k_iters_s"] = (
+            1000.0 * float(np.median(steady)) / max(len(train_loader), 1)
+        )
+        print("[timing] RUNTIME SUMMARY for {} ({} epochs on {}):".format(
+            runtime["exp_name"], len(epoch_train_times), runtime["gpu_name"] or device))
+        print("[timing]   training only        = {:.1f}s ({:.2f} h)".format(train_time, train_time / 3600))
+        print("[timing]   training+validation  = {:.1f}s ({:.2f} h)".format(total_loop_time, total_loop_time / 3600))
+        print("[timing]   mean epoch (train)   = {:.2f}s".format(train_time / len(epoch_train_times)))
+        print("[timing]   median epoch (train, excl. first) = {:.2f}s".format(runtime["median_epoch_train_time_s"]))
+        print("[timing]   training to best epoch ({}) = {:.1f}s ({:.2f} h)".format(
+            best_epoch, train_time_to_best, train_time_to_best / 3600))
+
+    # Test evaluation. The final model is reported for reference, but the number
+    # that matters is the one from the best-validation-epoch checkpoint.
     if get_config('evaluate_test', False):
-        test_loss, test_acc = evaluate(model, test_loader, device)
+        t0 = time.perf_counter()
+        test_loss, test_acc, test_acc5 = evaluate(model, test_loader, device)
+        synchronize(device)
+        runtime["test_time_s"] = time.perf_counter() - t0
         wandb.run.summary["test_loss"] = test_loss
         wandb.run.summary["test_acc"] = test_acc
-        print(f"Test: loss={test_loss:.4f}, acc={test_acc:.4f}")
+        runtime["final_test_acc1"] = 100.0 * test_acc
+        runtime["final_test_acc5"] = 100.0 * test_acc5
+        print(f"Test (final model): loss={test_loss:.4f}, acc={test_acc:.4f}, acc5={test_acc5:.4f}")
+
+        print("Testing best model (epoch {})...".format(best_epoch))
+        if checkpoint_path_acc.exists():
+            # weights_only=False: the checkpoint also stores the run config.
+            checkpoint = torch.load(checkpoint_path_acc, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            test_loss, test_acc, test_acc5 = evaluate(model, test_loader, device)
+            wandb.run.summary["best_test_loss"] = test_loss
+            wandb.run.summary["best_test_acc"] = test_acc
+            runtime["best_test_acc1"] = 100.0 * test_acc
+            runtime["best_test_acc5"] = 100.0 * test_acc5
+            print(f"Test (best val epoch {best_epoch}): loss={test_loss:.4f}, "
+                  f"acc={test_acc:.4f}, acc5={test_acc5:.4f}")
+        else:
+            print(f"No best-val checkpoint at {checkpoint_path_acc} — skipping.")
+
+    runtime["total_script_time_s"] = time.perf_counter() - script_start
+    save_runtime(runtime, runtime_path)
+    if runtime_path:
+        print("[timing] runtime record written to " + str(runtime_path))
 
     return best_val_acc
 
@@ -578,8 +780,35 @@ def main():
     Entry point for both standalone runs and W&B sweeps.
 
     For sweeps: wandb.init() connects to the sweep and populates wandb.config
-    For standalone: wandb.init() uses the default config below
+    For standalone: wandb.init() uses the default config below, optionally
+    overridden by CLI flags (ignored by the wandb sweep agent).
     """
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lorentz_method", type=str, default=None, choices=["ours", "theirs", "ilnn"])
+    parser.add_argument("--fc_variant", type=str, default=None, choices=["ours", "theirs", "ilnn"])
+    parser.add_argument("--norm_config", type=str, default=None,
+                        choices=["centering_weightnorm", "normal_noweightnorm"],
+                        help="FGG-LNN uses centering_weightnorm (centering-only BatchNorm + "
+                             "WeightNorm), HCNN normal_noweightnorm")
+    parser.add_argument("--manifold", type=str, default=None, choices=["lorentz", "euclidean"])
+    parser.add_argument("--dataset", type=str, default=None, choices=sorted(DATASETS))
+    parser.add_argument("--compile", action="store_true",
+                        help="torch.compile the model, as in the paper's CIFAR runs")
+    parser.add_argument("--num_epochs", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--val_fraction", type=float, default=None,
+                        help="0 = train on the full training set and validate on the test "
+                             "set (the ILNN baseline's protocol)")
+    parser.add_argument("--num_workers", type=int, default=None,
+                        help="DataLoader workers (ILNN uses 8)")
+    parser.add_argument("--evaluate_test", action="store_true",
+                        help="Evaluate the test set with the final and best-val-epoch models")
+    parser.add_argument("--exp_name", type=str, default=None)
+    parser.add_argument("--runtime_json", type=str, default=None,
+                        help="Write the per-epoch runtime record here (ILNN's runtime.json schema)")
+    args, _ = parser.parse_known_args()
 
     default_config = {
         # Model
@@ -610,9 +839,11 @@ def main():
         "lr_decay": 0.2,
 
         # Data
+        "dataset": "cifar10",  # "cifar10" or "cifar100"
         "val_fraction": 0.1,
         "train_subset_fraction": 1.0,
         "data_split_seed": 42,
+        "num_workers": 2,
 
         # Early stopping
         "early_stopping": False,
@@ -627,12 +858,40 @@ def main():
         "checkpoint_dir": "./checkpoints",
         "resume_checkpoint": None,  # Path to checkpoint to resume from
         "use_weight_norm": True,
-    } 
+    }
+
+    if args.fc_variant is not None:
+        default_config["fc_variant"] = args.fc_variant
+        default_config["lorentz_method"] = None
+    elif args.lorentz_method is not None:
+        default_config["lorentz_method"] = args.lorentz_method
+    if args.norm_config is not None:
+        default_config["norm_config"] = args.norm_config
+    if args.manifold is not None:
+        default_config["manifold"] = args.manifold
+    if args.compile:
+        default_config["compile"] = True
+    if args.dataset is not None:
+        default_config["dataset"] = args.dataset
+    if args.num_epochs is not None:
+        default_config["num_epochs"] = args.num_epochs
+    if args.seed is not None:
+        default_config["seed"] = args.seed
+    if args.val_fraction is not None:
+        default_config["val_fraction"] = args.val_fraction
+    if args.num_workers is not None:
+        default_config["num_workers"] = args.num_workers
+    if args.evaluate_test:
+        default_config["evaluate_test"] = True
+    if args.exp_name is not None:
+        default_config["exp_name"] = args.exp_name
+    if args.runtime_json is not None:
+        default_config["runtime_json"] = args.runtime_json
 
     # wandb.init() will use sweep config if run by wandb agent,
     # otherwise uses default_config
     wandb.init(
-        project="ICML_Hyperbolic",
+        project="FGG-LNN",
         config=default_config
     )
 
