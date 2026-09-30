@@ -1,9 +1,6 @@
 [project]
 name = "hyperbolic-fully-connected"
 version = "0.1.0"
-authors = [
-    { name = "ricardo-chavez-torres", email = "chaveztorresricardo@gmail.com" }
-]
 requires-python = ">=3.12"
 dependencies = [
     "torch",
