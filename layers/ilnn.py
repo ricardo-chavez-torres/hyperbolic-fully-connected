@@ -8,8 +8,9 @@ class ILNNLinear(nn.Module):
     """Point-to-Hyperplane Lorentz fully connected layer (ILNN, ICLR 2026).
 
     Baseline re-implementation of the ``PointToHyperplaneLorentzFC`` layer from
-    Long et al., "ILNN" (https://github.com/Longchentong/ILNN,
-    ``lib/lorentz/layers/LFC.py``), adapted to this repo's :class:`Lorentz`
+    Shi et al., "Intrinsic Lorentz Neural Network" (https://github.com/Longchentong/ILNN,
+    ``lib/lorentz/layers/LFC.py``; MIT License, Copyright (c) 2026 ILNN authors; the
+    original is in ``baselines/ilnn``), adapted to this repo's :class:`Lorentz`
     manifold and feature-dimension conventions.
 
     Like the rest of this codebase, ``in_features``/``out_features`` include the
@@ -26,10 +27,11 @@ class ILNNLinear(nn.Module):
     ``sinh`` followed by orthogonal projection. When ``do_mlr=True`` the signed
     distances are returned directly as logits.
 
-    Note: the optional learned gyro-bias from the reference implementation
-    (``share.share_b``, which depends on the ILNN GyroBN package) is intentionally
-    omitted to keep this baseline self-contained. It is off by default in the
-    reference configs.
+    Note: the learned gyro-bias of the reference implementation (``share.share_b``,
+    which depends on the ILNN GyroBN package) is omitted to keep this layer
+    self-contained. The reference enables it by default (``share_b = 1``, and
+    ``s_b = 1`` in its CIFAR configs), so this layer is ILNN without its bias; the
+    CIFAR results use the full original code in ``baselines/ilnn`` instead.
     """
 
     def __init__(

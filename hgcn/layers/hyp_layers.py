@@ -297,15 +297,18 @@ class HypLinearChen(nn.Module):
 class HypLinearILNN(nn.Module):
     """Point-to-Hyperplane Lorentz linear layer (ILNN, ICLR 2026), adapted for HGCN.
 
-    Baseline re-implementation of ``PointToHyperplaneLorentzFC`` from
-    Long et al., "ILNN" (https://github.com/Longchentong/ILNN). Computes the
-    signed geodesic distance to learned hyperplanes (the ``asinh`` formula) and
-    maps it back onto the hyperboloid via ``sinh`` + orthogonal projection.
+    Baseline re-implementation of ``PointToHyperplaneLorentzFC`` from Shi et al.,
+    "Intrinsic Lorentz Neural Network" (https://github.com/Longchentong/ILNN; MIT
+    License, Copyright (c) 2026 ILNN authors; original in ``baselines/ilnn``).
+    Computes the signed geodesic distance to learned hyperplanes (the ``asinh``
+    formula) and maps it back onto the hyperboloid via ``sinh`` + orthogonal
+    projection.
 
     Uses the same manifold API (``k()``, ``projection_space_orthogonal``) as
     ``HypLinearOurs``, so the curvature convention is shared with the rest of the
-    pipeline. The optional gyro-bias from the reference implementation is omitted
-    (off by default there) to keep this self-contained.
+    pipeline. The learned gyro-bias of the reference implementation is omitted to
+    keep this self-contained, although the reference enables it by default
+    (``share_b = 1``), so this is ILNN without its bias.
     """
 
     def __init__(self, manifold, in_features, out_features, eps=1e-9):
