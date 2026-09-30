@@ -87,6 +87,8 @@ def getArguments():
     # Dataset settings
     parser.add_argument('--dataset', default='CIFAR-100', type=str, choices=["MNIST", "CIFAR-10", "CIFAR-100", "Tiny-ImageNet"], 
                         help = "Select a dataset.")
+    parser.add_argument('--data_dir', default='data', type=str,
+                        help = "torchvision dataset root; relative paths are resolved against the ILNN root.")
 
 
     args, _ = parser.parse_known_args()

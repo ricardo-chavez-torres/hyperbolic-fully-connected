@@ -104,6 +104,10 @@ def getArguments():
     parser.add_argument('--dataset', default='CIFAR-100', type=str,
                         choices=["MNIST", "CIFAR-10", "CIFAR-100", "Tiny-ImageNet"],
                         help="Select a dataset.")
+    parser.add_argument('--data_dir', default='data', type=str,
+                        help="torchvision dataset root; relative paths are resolved against the "
+                             "ILNN root (baselines/ilnn), which this script makes the working "
+                             "directory.")
     parser.add_argument('--val_fraction', default=0.1, type=float,
                         help="Fraction of the training set held out for validation. The best "
                              "epoch is selected on it and only that checkpoint is tested. Pass 0 "

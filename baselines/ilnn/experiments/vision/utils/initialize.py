@@ -168,7 +168,7 @@ def split_train_val(train_set, train_set_eval, val_fraction, seed):
     not the random crops.
 
     The index arithmetic here is deliberately identical to get_dataloaders() in
-    ~/hyperbolic-fully-connected/cifar_exp/main.py (numpy RandomState(seed),
+    cifar_exp/main.py at the root of this repository (numpy RandomState(seed),
     shuffle, validation takes the first ``val_fraction`` of the shuffled indices).
     Same torchvision dataset order + same RNG + same seed => both codebases train
     on exactly the same images and validate on exactly the same images, which is
@@ -199,6 +199,9 @@ def select_dataset(args, val_fraction=None, split_seed=None):
         val_fraction = getattr(args, "val_fraction", 0.0)
     if split_seed is None:
         split_seed = getattr(args, "data_split_seed", 42)
+    # torchvision dataset root. Relative paths resolve against the ILNN root, which
+    # train.py/test.py make the working directory; upstream hard-coded 'data'.
+    data_dir = getattr(args, "data_dir", "data")
 
     val_set = None
 
@@ -214,9 +217,9 @@ def select_dataset(args, val_fraction=None, split_seed=None):
             transforms.Resize((32,32), antialias=None)
         ])
 
-        train_set = datasets.MNIST('data', train=True, download=True, transform=train_transform)
-        train_set_eval = datasets.MNIST('data', train=True, download=True, transform=test_transform)
-        test_set = datasets.MNIST('data', train=False, download=True, transform=test_transform)
+        train_set = datasets.MNIST(data_dir, train=True, download=True, transform=train_transform)
+        train_set_eval = datasets.MNIST(data_dir, train=True, download=True, transform=test_transform)
+        test_set = datasets.MNIST(data_dir, train=False, download=True, transform=test_transform)
 
         img_dim = [1, 32, 32]
         num_classes = 10
@@ -234,9 +237,9 @@ def select_dataset(args, val_fraction=None, split_seed=None):
             transforms.Normalize((0.5074, 0.4867, 0.4411), (0.267, 0.256, 0.276)),
         ])
 
-        train_set = datasets.CIFAR10('data', train=True, download=True, transform=train_transform)
-        train_set_eval = datasets.CIFAR10('data', train=True, download=True, transform=test_transform)
-        test_set = datasets.CIFAR10('data', train=False, download=True, transform=test_transform)
+        train_set = datasets.CIFAR10(data_dir, train=True, download=True, transform=train_transform)
+        train_set_eval = datasets.CIFAR10(data_dir, train=True, download=True, transform=test_transform)
+        test_set = datasets.CIFAR10(data_dir, train=False, download=True, transform=test_transform)
 
         img_dim = [3, 32, 32]
         num_classes = 10
@@ -254,9 +257,9 @@ def select_dataset(args, val_fraction=None, split_seed=None):
             transforms.Normalize((0.5074, 0.4867, 0.4411), (0.267, 0.256, 0.276)),
         ])
 
-        train_set = datasets.CIFAR100('data', train=True, download=True, transform=train_transform)
-        train_set_eval = datasets.CIFAR100('data', train=True, download=True, transform=test_transform)
-        test_set = datasets.CIFAR100('data', train=False, download=True, transform=test_transform)
+        train_set = datasets.CIFAR100(data_dir, train=True, download=True, transform=train_transform)
+        train_set_eval = datasets.CIFAR100(data_dir, train=True, download=True, transform=test_transform)
+        test_set = datasets.CIFAR100(data_dir, train=False, download=True, transform=test_transform)
 
         img_dim = [3, 32, 32]
         num_classes = 100
