@@ -17,6 +17,8 @@ dependencies = [
     "matplotlib>=3.10.7",
     "openood",
     "numpy>=2.3.4",
+    # baselines/ilnn (ILNN's training script reads its configs with configargparse)
+    "configargparse>=1.5.3",
 ]
 
 [project.optional-dependencies]

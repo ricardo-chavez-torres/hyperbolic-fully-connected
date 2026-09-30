@@ -50,6 +50,11 @@ toy_exp/              Hyperplane convergence experiments
 
 runtime_exp/          Runtime benchmarking
   my_runtimes.py      Benchmarks across layer implementations and dimensions
+  benchmark_training_time.sh   CIFAR-100 training time of all models on one GPU
+
+baselines/            Third-party baselines, with their licenses (see baselines/README.md)
+  ilnn/               ILNN (Intrinsic Lorentz Neural Network) ResNet-18
+  poincare_resnet/    Poincaré ResNet model code
 ```
 
 ## Usage
@@ -96,6 +101,14 @@ The `fc_variant` parameter selects between two fully connected layer implementat
 
 - **`"ours"`** (`LorentzFullyConnectedOurs`): Computes signed distance to learned hyperplanes in the Lorentz model. Supports weight normalization and an MLR classification mode.
 - **`"theirs"`** (`LorentzFullyConnectedTheirs`): Based on Chen et al. (2022), applies a standard linear map followed by projection onto the manifold.
+
+## Baselines
+
+ILNN and the Poincaré ResNet are compared against using their original code, included in
+`baselines/` with their licenses and notices. ILNN was modified only to use the same held-out
+validation split as `cifar_exp/main.py` and to record training time. The upstream commits, every
+change, and the commands that reproduce the reported numbers are listed in
+[baselines/README.md](baselines/README.md).
 
 ## References
 

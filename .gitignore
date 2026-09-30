@@ -16,5 +16,7 @@ msp.yml
 wandb/
 cifar_exp/checkpoints/
 slurm/logs/
+runtime_exp/results/
+outputs/
 *.egg-info/
 __pycache__/
