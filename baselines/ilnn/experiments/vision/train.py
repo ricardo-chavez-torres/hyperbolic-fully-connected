@@ -13,7 +13,10 @@ from torch.nn import DataParallel
 import configargparse
 from tqdm import tqdm
 
+import json
+import platform
 import random
+import time
 import numpy as np
 
 from utils.initialize import select_dataset, select_model, select_optimizer, load_checkpoint
@@ -101,13 +104,35 @@ def getArguments():
     parser.add_argument('--dataset', default='CIFAR-100', type=str,
                         choices=["MNIST", "CIFAR-10", "CIFAR-100", "Tiny-ImageNet"],
                         help="Select a dataset.")
+    parser.add_argument('--val_fraction', default=0.1, type=float,
+                        help="Fraction of the training set held out for validation. The best "
+                             "epoch is selected on it and only that checkpoint is tested. Pass 0 "
+                             "for this repo's original behaviour, where there is no held-out "
+                             "split and the epoch is selected on the test set itself.")
+    parser.add_argument('--data_split_seed', default=42, type=int,
+                        help="Seed for the train/validation split. Kept separate from --seed so "
+                             "that different training seeds still share one fixed split.")
 
     args = parser.parse_args()
 
     return args
 
 
+def synchronize(device):
+    """ Waits for queued CUDA work, so that wall-clock timings are accurate. """
+    if device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+
+
+def save_runtime(runtime, path):
+    """ Writes the runtime record to disk (rewritten after every epoch, so the
+    measurements survive a job that is killed before the last epoch). """
+    with open(path, "w") as f:
+        json.dump(runtime, f, indent=2)
+
+
 def main(args):
+    script_start = time.perf_counter()
     device = args.device[0]
     if device.startswith("cuda") and not torch.cuda.is_available():
         device = "cpu"
@@ -133,17 +158,59 @@ def main(args):
     args.output_dir = os.path.join(args.output_dir, dist_dir)
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+    print("Output directory: " + os.path.abspath(args.output_dir))
+
+    # Runtime record: cost of training this model, written next to the checkpoints
+    # so that different methods/machines can be compared after the fact.
+    runtime_path = os.path.join(args.output_dir, "runtime.json")
+    runtime = {
+        "exp_name": args.exp_name,
+        "dataset": args.dataset,
+        "seed": args.seed,
+        "num_epochs": args.num_epochs,
+        "batch_size": args.batch_size,
+        "encoder_manifold": args.encoder_manifold,
+        "decoder_manifold": args.decoder_manifold,
+        "compile": args.compile,
+        "device": device,
+        "gpu_name": torch.cuda.get_device_name(device) if device.startswith("cuda") and torch.cuda.is_available() else None,
+        "hostname": platform.node(),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "output_dir": os.path.abspath(args.output_dir),
+        "epochs": [],
+    }
+    save_runtime(runtime, runtime_path)
 
     print("Loading dataset...")
+    t0 = time.perf_counter()
     train_loader, val_loader, test_loader, img_dim, num_classes = select_dataset(args)
+    runtime["dataset_setup_time_s"] = time.perf_counter() - t0
+    runtime["val_protocol"] = (
+        "test_set_as_val" if args.val_fraction == 0 else "heldout_{}".format(args.val_fraction)
+    )
+    runtime["data_split_seed"] = args.data_split_seed
+    runtime["train_set_size"] = len(train_loader.dataset)
+    runtime["val_set_size"] = len(val_loader.dataset)
+    runtime["test_set_size"] = len(test_loader.dataset)
+    print("Dataset sizes: train={}, val={}, test={} ({})".format(
+        len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset),
+        runtime["val_protocol"]))
 
     print("Creating model...")
+    t0 = time.perf_counter()
     model = select_model(img_dim, num_classes, args)
     model = model.to(device)
+    synchronize(device)
+    runtime["model_setup_time_s"] = time.perf_counter() - t0
     print('-> Number of model params: {} (trainable: {})'.format(
         sum(p.numel() for p in model.parameters()),
         sum(p.numel() for p in model.parameters() if p.requires_grad),
     ))
+    runtime["num_params"] = sum(p.numel() for p in model.parameters())
+    runtime["num_trainable_params"] = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    runtime["iterations_per_epoch"] = len(train_loader)
 
     print("Creating optimizer...")
     optimizer, lr_scheduler = select_optimizer(model, args)
@@ -168,8 +235,14 @@ def main(args):
     best_acc = 0.0
     best_epoch = 0
 
+    train_time = 0.0  # pure optimisation time, without validation/checkpointing
+    val_time = 0.0
+    train_time_to_best = 0.0  # training seconds spent to reach the best val epoch
+    loop_start = time.perf_counter()
+
     for epoch in range(start_epoch, args.num_epochs):
         model.train()
+        epoch_start = time.perf_counter()
 
         losses = AverageMeter("Loss", ":.4e")
         acc1 = AverageMeter("Acc@1", ":6.2f")
@@ -196,6 +269,11 @@ def main(args):
             global_step += 1
             # ------- End iteration -------
 
+        synchronize(device)
+        epoch_train_time = time.perf_counter() - epoch_start
+        train_time += epoch_train_time
+        val_start = time.perf_counter()
+
         # ------- Start validation and logging -------
         with torch.no_grad():
             if lr_scheduler is not None:
@@ -216,6 +294,7 @@ def main(args):
             if acc1_val > best_acc:
                 best_acc = acc1_val
                 best_epoch = epoch + 1
+                train_time_to_best = train_time
                 if args.output_dir is not None:
                     save_path = args.output_dir + "/best_" + args.exp_name + ".pth"
                     torch.save({
@@ -227,8 +306,55 @@ def main(args):
                     }, save_path)
         # ------- End validation and logging -------
 
+        synchronize(device)
+        epoch_val_time = time.perf_counter() - val_start
+        val_time += epoch_val_time
+
+        runtime["epochs"].append({
+            "epoch": epoch + 1,
+            "train_time_s": epoch_train_time,
+            "val_time_s": epoch_val_time,
+            "val_loss": loss_val,
+            "val_acc1": acc1_val,
+        })
+        runtime["epochs_completed"] = len(runtime["epochs"])
+        runtime["train_time_s"] = train_time
+        runtime["val_time_s"] = val_time
+        runtime["elapsed_since_loop_start_s"] = time.perf_counter() - loop_start
+        runtime["mean_epoch_train_time_s"] = train_time / len(runtime["epochs"])
+        save_runtime(runtime, runtime_path)
+
+        print("[timing] epoch {}/{}: train={:.1f}s, val={:.1f}s, elapsed={:.1f}s, projected_total_train={:.1f}s".format(
+            epoch + 1, args.num_epochs, epoch_train_time, epoch_val_time,
+            runtime["elapsed_since_loop_start_s"],
+            runtime["mean_epoch_train_time_s"] * args.num_epochs))
+
+    total_loop_time = time.perf_counter() - loop_start
+    runtime["total_loop_time_s"] = total_loop_time
+    runtime["best_epoch"] = best_epoch
+    runtime["best_val_acc1"] = best_acc
+    runtime["train_time_to_best_epoch_s"] = train_time_to_best
+
     print("-----------------\nTraining finished\n-----------------")
-    print("Best epoch = {}, with Acc@1={:.4f}".format(best_epoch, best_acc))
+    print("Best epoch = {}, with val Acc@1={:.4f}".format(best_epoch, best_acc))
+
+    epoch_train_times = [e["train_time_s"] for e in runtime["epochs"]]
+    if epoch_train_times:
+        # Steady-state estimate: the first epoch pays for CUDA/cuDNN warm-up.
+        steady = epoch_train_times[1:] if len(epoch_train_times) > 1 else epoch_train_times
+        runtime["median_epoch_train_time_s"] = float(np.median(steady))
+        runtime["first_epoch_train_time_s"] = epoch_train_times[0]
+        runtime["train_time_per_1k_iters_s"] = (
+            1000.0 * float(np.median(steady)) / max(len(train_loader), 1)
+        )
+        print("[timing] RUNTIME SUMMARY for {} ({} epochs on {}):".format(
+            args.exp_name, len(epoch_train_times), runtime["gpu_name"] or device))
+        print("[timing]   training only        = {:.1f}s ({:.2f} h)".format(train_time, train_time / 3600))
+        print("[timing]   training+validation  = {:.1f}s ({:.2f} h)".format(total_loop_time, total_loop_time / 3600))
+        print("[timing]   mean epoch (train)   = {:.2f}s".format(train_time / len(epoch_train_times)))
+        print("[timing]   median epoch (train, excl. first) = {:.2f}s".format(runtime["median_epoch_train_time_s"]))
+        print("[timing]   training to best epoch ({}) = {:.1f}s ({:.2f} h)".format(
+            best_epoch, train_time_to_best, train_time_to_best / 3600))
 
     if args.output_dir is not None:
         save_path = args.output_dir + "/final_" + args.exp_name + ".pth"
@@ -244,16 +370,23 @@ def main(args):
         print("Model not saved.")
 
     print("Testing final model...")
+    t0 = time.perf_counter()
     loss_test, acc1_test, acc5_test = evaluate(model, test_loader, criterion, device)
+    synchronize(device)
+    runtime["test_time_s"] = time.perf_counter() - t0
 
     print("Results: Loss={:.4f}, Acc@1={:.4f}, Acc@5={:.4f}".format(
         loss_test, acc1_test, acc5_test))
+    runtime["final_test_acc1"] = acc1_test
+    runtime["final_test_acc5"] = acc5_test
 
-    print("Testing best model...")
+    print("Testing best model (epoch {})...".format(best_epoch))
     if args.output_dir is not None:
         print("Loading best model...")
         save_path = args.output_dir + "/best_" + args.exp_name + ".pth"
-        checkpoint = torch.load(save_path, map_location=device)
+        # weights_only=False: the checkpoint also stores the argparse Namespace,
+        # which the PyTorch >=2.6 default (weights_only=True) refuses to unpickle.
+        checkpoint = torch.load(save_path, map_location=device, weights_only=False)
         target_model = model.module if isinstance(model, DataParallel) else model
         target_model.load_state_dict(checkpoint['model'], strict=True)
 
@@ -261,8 +394,15 @@ def main(args):
 
         print("Results: Loss={:.4f}, Acc@1={:.4f}, Acc@5={:.4f}".format(
             loss_test, acc1_test, acc5_test))
+        runtime["best_epoch"] = best_epoch
+        runtime["best_test_acc1"] = acc1_test
+        runtime["best_test_acc5"] = acc5_test
     else:
         print("Best model not saved, because no output_dir given.")
+
+    runtime["total_script_time_s"] = time.perf_counter() - script_start
+    save_runtime(runtime, runtime_path)
+    print("[timing] runtime record written to " + runtime_path)
 
 
 @torch.no_grad()
@@ -284,7 +424,7 @@ def evaluate(model, dataloader, criterion, device):
         loss = criterion(logits, y)
 
         top1, top5 = accuracy(logits, y, topk=(1, 5))
-        losses.update(loss.item())
+        losses.update(loss.item(), x.shape[0])
         acc1.update(top1.item(), x.shape[0])
         acc5.update(top5.item(), x.shape[0])
 

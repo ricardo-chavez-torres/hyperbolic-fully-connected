@@ -108,7 +108,7 @@ def main(args):
     print(args)
 
     print("Loading dataset...")
-    train_loader, _, test_loader, img_dim, num_classes = select_dataset(args, validation_split=False)
+    train_loader, _, test_loader, img_dim, num_classes = select_dataset(args, val_fraction=0.0)
 
     print("Creating model...")
     model = select_model(img_dim, num_classes, args)

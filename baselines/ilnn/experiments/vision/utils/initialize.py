@@ -1,6 +1,7 @@
+import numpy as np
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from lib.geoopt import ManifoldParameter
 from lib.geoopt.optim import RiemannianAdam, RiemannianSGD
@@ -13,7 +14,9 @@ from lib.GyroBN.GyroBNH import GyroBNH
 def load_checkpoint(model, optimizer, lr_scheduler, args):
     """ Loads a checkpoint from file-system. """
 
-    checkpoint = torch.load(args.load_checkpoint, map_location='cpu')
+    # weights_only=False: checkpoints also store the argparse Namespace, which the
+    # PyTorch >=2.6 default (weights_only=True) refuses to unpickle.
+    checkpoint = torch.load(args.load_checkpoint, map_location='cpu', weights_only=False)
 
     model.load_state_dict(checkpoint['model'])
 
@@ -36,7 +39,7 @@ def load_checkpoint(model, optimizer, lr_scheduler, args):
 
 def load_model_checkpoint(model, checkpoint_path):
     """ Loads a checkpoint from file-system. """
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     model.load_state_dict(checkpoint['model'])
 
     return model
@@ -157,11 +160,50 @@ def get_param_groups(model, lr_manifold, weight_decay_manifold):
 
     return parameters
 
-def select_dataset(args, validation_split=False):
-    """ Selects an available dataset and returns PyTorch dataloaders for training, validation and testing. """
+def split_train_val(train_set, train_set_eval, val_fraction, seed):
+    """ Splits a training set into disjoint train/validation subsets.
+
+    The validation subset is drawn from ``train_set_eval``, i.e. the same images
+    without the training-time augmentation, so validation measures the model and
+    not the random crops.
+
+    The index arithmetic here is deliberately identical to get_dataloaders() in
+    ~/hyperbolic-fully-connected/cifar_exp/main.py (numpy RandomState(seed),
+    shuffle, validation takes the first ``val_fraction`` of the shuffled indices).
+    Same torchvision dataset order + same RNG + same seed => both codebases train
+    on exactly the same images and validate on exactly the same images, which is
+    what makes their best-val-epoch model selection comparable.
+    """
+    indices = list(range(len(train_set)))
+    rng = np.random.RandomState(seed)
+    rng.shuffle(indices)
+
+    val_size = int(len(train_set) * val_fraction)
+    val_indices = indices[:val_size]
+    train_indices = indices[val_size:]
+
+    return Subset(train_set, train_indices), Subset(train_set_eval, val_indices)
+
+
+def select_dataset(args, val_fraction=None, split_seed=None):
+    """ Selects an available dataset and returns PyTorch dataloaders for training, validation and testing.
+
+    Returns (train_loader, val_loader, test_loader, img_dim, num_classes).
+
+    ``val_fraction`` is the fraction of the training set held out for validation.
+    It defaults to args.val_fraction; pass 0 to get the original behaviour of this
+    repo, where there is no held-out split and val_loader *is* test_loader (i.e.
+    the epoch is selected on the test set).
+    """
+    if val_fraction is None:
+        val_fraction = getattr(args, "val_fraction", 0.0)
+    if split_seed is None:
+        split_seed = getattr(args, "data_split_seed", 42)
+
+    val_set = None
 
     if args.dataset == 'MNIST':
-        
+
         train_transform=transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((32,32), antialias=None)
@@ -173,8 +215,7 @@ def select_dataset(args, validation_split=False):
         ])
 
         train_set = datasets.MNIST('data', train=True, download=True, transform=train_transform)
-        if validation_split:
-            train_set, val_set = torch.utils.data.random_split(train_set, [50000, 10000], generator=torch.Generator().manual_seed(1))
+        train_set_eval = datasets.MNIST('data', train=True, download=True, transform=test_transform)
         test_set = datasets.MNIST('data', train=False, download=True, transform=test_transform)
 
         img_dim = [1, 32, 32]
@@ -194,8 +235,7 @@ def select_dataset(args, validation_split=False):
         ])
 
         train_set = datasets.CIFAR10('data', train=True, download=True, transform=train_transform)
-        if validation_split:
-            train_set, val_set = torch.utils.data.random_split(train_set, [40000, 10000], generator=torch.Generator().manual_seed(1))
+        train_set_eval = datasets.CIFAR10('data', train=True, download=True, transform=test_transform)
         test_set = datasets.CIFAR10('data', train=False, download=True, transform=test_transform)
 
         img_dim = [3, 32, 32]
@@ -215,8 +255,7 @@ def select_dataset(args, validation_split=False):
         ])
 
         train_set = datasets.CIFAR100('data', train=True, download=True, transform=train_transform)
-        if validation_split:
-            train_set, val_set = torch.utils.data.random_split(train_set, [40000, 10000], generator=torch.Generator().manual_seed(1))
+        train_set_eval = datasets.CIFAR100('data', train=True, download=True, transform=test_transform)
         test_set = datasets.CIFAR100('data', train=False, download=True, transform=test_transform)
 
         img_dim = [3, 32, 32]
@@ -241,6 +280,7 @@ def select_dataset(args, validation_split=False):
         ])
 
         train_set = datasets.ImageFolder(train_dir, train_transform)
+        train_set_eval = None  # Tiny-ImageNet ships its own validation directory
         val_set = datasets.ImageFolder(val_dir, test_transform)
         test_set = datasets.ImageFolder(test_dir, test_transform)
 
@@ -249,29 +289,37 @@ def select_dataset(args, validation_split=False):
 
     else:
         raise "Selected dataset '{}' not available.".format(args.dataset)
-    
+
+    # Hold out a validation split, unless the dataset already came with one
+    # (Tiny-ImageNet) or val_fraction is 0 (then validation == test, the original
+    # behaviour of this repo).
+    if val_set is None and val_fraction > 0:
+        train_set, val_set = split_train_val(
+            train_set, train_set_eval, val_fraction, split_seed
+        )
+
     # Dataloader
-    train_loader = DataLoader(train_set, 
-        batch_size=args.batch_size, 
-        num_workers=8, 
-        pin_memory=True, 
+    train_loader = DataLoader(train_set,
+        batch_size=args.batch_size,
+        num_workers=8,
+        pin_memory=True,
         shuffle=True
     )
-    test_loader = DataLoader(test_set, 
-        batch_size=args.batch_size_test, 
-        num_workers=8, 
-        pin_memory=True, 
+    test_loader = DataLoader(test_set,
+        batch_size=args.batch_size_test,
+        num_workers=8,
+        pin_memory=True,
         shuffle=False
-    ) 
-    
-    if validation_split:
-        val_loader = DataLoader(val_set, 
-            batch_size=args.batch_size_test, 
-            num_workers=8, 
-            pin_memory=True, 
+    )
+
+    if val_set is not None:
+        val_loader = DataLoader(val_set,
+            batch_size=args.batch_size_test,
+            num_workers=8,
+            pin_memory=True,
             shuffle=False
         )
     else:
         val_loader = test_loader
-        
-    return train_loader, test_loader, val_loader, img_dim, num_classes
+
+    return train_loader, val_loader, test_loader, img_dim, num_classes
