@@ -13,9 +13,11 @@ class Euclidean(Manifold):
         self.name = 'Euclidean'
 
     def normalize(self, p):
+        # Out-of-place renorm: the in-place renorm_ mutates the encoder's ReLU
+        # output, which newer autograd (torch>=2.x) rejects during backward on
+        # the Euclidean LP path. Values are identical.
         dim = p.size(-1)
-        p.view(-1, dim).renorm_(2, 0, 1.)
-        return p
+        return p.view(-1, dim).renorm(2, 0, 1.).view_as(p)
 
     def sqdist(self, p1, p2, c):
         return (p1 - p2).pow(2).sum(dim=-1)
