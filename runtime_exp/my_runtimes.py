@@ -29,7 +29,23 @@ class EuclideanLinear(nn.Module):
 
       def forward(self, x):
           return F.relu(x @ self.weight + self.bias)
-      
+
+
+ILNN_ROOT = parent_dir.parent / "baselines" / "ilnn"
+
+
+def original_ilnn_linear(in_features, out_features):
+    """ILNN's own PointToHyperplaneLorentzFC (baselines/ilnn), with the gyro-bias it
+    enables by default (share_b = 1). layers.ILNNLinear omits that bias."""
+    if str(ILNN_ROOT) not in sys.path:
+        sys.path.append(str(ILNN_ROOT))
+    import share
+    from lib.lorentz.manifold import CustomLorentz
+    from lib.lorentz.layers.LFC import PointToHyperplaneLorentzFC
+
+    share.share_b = 1
+    return PointToHyperplaneLorentzFC(CustomLorentz(k=1.0), in_features, out_features)
+
 
 def time_operation_cuda(model, input_tensor, method_name="forward"):
     """
@@ -216,6 +232,11 @@ def main():
                     in_features=in_dim + 1,
                     out_features=out_dim + 1,
                 ),
+                lorentz_input,
+                "forward",
+            ),
+            "ILNN (original)": (
+                original_ilnn_linear(in_dim + 1, out_dim + 1),
                 lorentz_input,
                 "forward",
             ),
