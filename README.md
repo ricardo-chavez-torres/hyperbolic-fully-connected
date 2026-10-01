@@ -50,6 +50,8 @@ toy_exp/              Hyperplane convergence experiments
 
 runtime_exp/          Runtime benchmarking
   my_runtimes.py      Benchmarks across layer implementations and dimensions
+  runtime_results_mine_2026-03.csv            its results, March 2026
+  runtime_results_mine_2026-07_titan_rtx.csv  re-run with ILNN added, July 2026, TITAN RTX
   benchmark_training_time.sh   CIFAR-100 training time of all models on one GPU
 
 baselines/            Third-party baselines, with their licenses (see baselines/README.md)
