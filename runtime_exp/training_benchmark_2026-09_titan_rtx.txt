@@ -1,0 +1,14 @@
+GPU: NVIDIA TITAN RTX   iterations/epoch: 352
+model                  mode      epochs 1st epoch s  epoch s x Eucl (same mode) x Eucl (eager)
+data loader only                      3         2.9     2.87                                  
+Euclidean ResNet-18    eager          4        19.2    20.63              1.00x          1.00x
+Euclidean ResNet-18 (repeat) eager          4        19.0    19.73              0.96x          0.96x
+Euclidean ResNet-18    compiled       4        64.1    20.28              1.00x          0.98x
+FGG-LNN ResNet-18      eager          4       130.5   130.04              6.30x          6.30x
+FGG-LNN ResNet-18      compiled       4       407.0    58.32              2.88x          2.83x
+HCNN ResNet-18         eager          4       139.5   140.15              6.79x          6.79x
+HCNN ResNet-18         compiled       4       406.3    59.59              2.94x          2.89x
+ILNN ResNet-18         eager          4       236.6   232.67             11.28x         11.28x
+ILNN ResNet-18         compiled  missing / failed
+Poincaré ResNet-20     eager          4       179.1   178.20              8.64x          8.64x
+Poincaré ResNet-20     compiled  missing / failed
